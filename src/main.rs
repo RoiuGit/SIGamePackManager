@@ -1,11 +1,13 @@
 use eframe::Storage;
 use native_dialog::FileDialog;
-use std::collections::HashMap;
-use std::error::Error;
-use std::ffi::OsStr;
-use std::fs::File;
-use std::io::{Read, Seek, Write};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    error::Error,
+    ffi::OsStr,
+    fs::File,
+    io::{Read, Seek},
+    path::{Path, PathBuf},
+};
 
 static FILE_EXTENSION: &str = "siq";
 
@@ -45,7 +47,11 @@ impl eframe::App for AppState {
             ui.horizontal(|ui| {
                 ui.label("Type:");
                 ui.selectable_value(&mut self.selected_type, SelectionType::File, "File");
-                ui.selectable_value(&mut self.selected_type, SelectionType::Directory, "Directory");
+                ui.selectable_value(
+                    &mut self.selected_type,
+                    SelectionType::Directory,
+                    "Directory",
+                );
             });
 
             // Action selector
@@ -58,7 +64,6 @@ impl eframe::App for AppState {
             });
 
             ui.horizontal(|ui| {
-
                 // File browser button
                 if ui.button("Browse").clicked() {
                     let path = if self.selected_type == SelectionType::File {
@@ -66,8 +71,7 @@ impl eframe::App for AppState {
                             .add_filter("SIGame files", &[FILE_EXTENSION])
                             .show_open_single_file()
                     } else {
-                        FileDialog::new()
-                            .show_open_single_dir()
+                        FileDialog::new().show_open_single_dir()
                     };
 
                     match path {
@@ -86,15 +90,11 @@ impl eframe::App for AppState {
                             Ok(msg) => self.output = msg,
                             Err(e) => self.output = format!("Error: {}", e),
                         }
+                    } else if !self.selected_index.is_empty() {
+                        self.output = remove_by_index(&self.selected_index, &mut self.store_map)
+                            .unwrap_or_else(|e| format!("Error: {}", e));
                     } else {
-                        if !self.selected_index.is_empty() {
-                            self.output = remove_by_index(&self.selected_index, &mut self.store_map).unwrap_or_else(|e| {
-                                format!("Error: {}", e)
-                            });
-                        }
-                        else {
-                            self.output = "Please select a file or directory first.".to_string();
-                        }
+                        self.output = "Please select a file or directory first.".to_string();
                     }
                 }
 
@@ -106,9 +106,14 @@ impl eframe::App for AppState {
 
             //Selected
             ui.separator();
-            ui.label(&format!("Selected: {}", self.selected_path.as_ref()
-                .unwrap_or(&PathBuf::new())
-                .to_str().unwrap_or("")));
+            ui.label(format!(
+                "Selected: {}",
+                self.selected_path
+                    .as_ref()
+                    .unwrap_or(&PathBuf::new())
+                    .to_str()
+                    .unwrap_or("")
+            ));
 
             // Output window
             ui.separator();
@@ -126,11 +131,9 @@ impl eframe::App for AppState {
             storage.set_string("store_map", serialized);
         }
     }
-
 }
 
 impl AppState {
-
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let mut store_map = HashMap::new();
         if let Some(storage) = cc.storage {
@@ -165,20 +168,16 @@ impl AppState {
     fn execute_action(&mut self, path: &Path) -> Result<String, Box<dyn Error>> {
         // Dummy implementation for now
         let output: String = match self.selected_action {
-            Action::Add => {
-                match self.selected_type {
-                    SelectionType::File => handle_add_file(path, &mut self.store_map)?,
-                    SelectionType::Directory => handle_add_dir(path, &mut self.store_map)?,
-                }
+            Action::Add => match self.selected_type {
+                SelectionType::File => handle_add_file(path, &mut self.store_map)?,
+                SelectionType::Directory => handle_add_dir(path, &mut self.store_map)?,
             },
-            Action::Check => {
-                match self.selected_type {
-                    SelectionType::File => handle_check_file(path, &self.store_map)?,
-                    SelectionType::Directory => handle_check_dir(path, &self.store_map)?,
-                }
-                },
+            Action::Check => match self.selected_type {
+                SelectionType::File => handle_check_file(path, &self.store_map)?,
+                SelectionType::Directory => handle_check_dir(path, &self.store_map)?,
+            },
             Action::Remove => {
-                let mut index = self.selected_index.clone();
+                let index = self.selected_index.clone();
                 if index.is_empty() {
                     match self.selected_type {
                         SelectionType::File => handle_remove_file(path, &mut self.store_map)?,
@@ -187,45 +186,45 @@ impl AppState {
                 } else {
                     remove_by_index(&index, &mut self.store_map)?
                 }
-            },
+            }
         };
 
         Ok(output)
     }
 }
 
-fn file_to_map(file: &str) -> Result<StoreMap, Box<dyn Error>> {
-    let mut map = HashMap::new();
-    let mut file = File::open(file)?;
-    let mut buf = String::new();
-    file.read_to_string(&mut buf)?;
-    for line in buf.lines() {
-        let mut parts = line.split(',');
-        let key = parts.next().ok_or("Invalid line")?;
-        let values = map.entry(key.to_string()).or_insert(Vec::new());
-        for value in parts {
-            values.push(value.to_string());
-        }
-    }
-    Ok(map)
-}
+// fn file_to_map(file: &str) -> Result<StoreMap, Box<dyn Error>> {
+//     let mut map = HashMap::new();
+//     let mut file = File::open(file)?;
+//     let mut buf = String::new();
+//     file.read_to_string(&mut buf)?;
+//     for line in buf.lines() {
+//         let mut parts = line.split(',');
+//         let key = parts.next().ok_or("Invalid line")?;
+//         let values = map.entry(key.to_string()).or_insert(Vec::new());
+//         for value in parts {
+//             values.push(value.to_string());
+//         }
+//     }
+//     Ok(map)
+// }
 
-fn map_to_file(map: &StoreMap, file: &str) -> Result<(), Box<dyn Error>> {
-    let mut file = File::create(file)?;
-    for key in map.keys() {
-        file.write_all(key.as_bytes())?;
-        file.write_all(b",")?;
-        let values = map.get(key).unwrap();
-        for (i, value) in values.iter().enumerate() {
-            file.write_all(value.as_bytes())?;
-            if i < values.len() - 1 {
-                file.write_all(b",")?;
-            }
-        }
-        file.write_all(b"\n")?;
-    }
-    Ok(())
-}
+// fn map_to_file(map: &StoreMap, file: &str) -> Result<(), Box<dyn Error>> {
+//     let mut file = File::create(file)?;
+//     for key in map.keys() {
+//         file.write_all(key.as_bytes())?;
+//         file.write_all(b",")?;
+//         let values = map.get(key).unwrap();
+//         for (i, value) in values.iter().enumerate() {
+//             file.write_all(value.as_bytes())?;
+//             if i < values.len() - 1 {
+//                 file.write_all(b",")?;
+//             }
+//         }
+//         file.write_all(b"\n")?;
+//     }
+//     Ok(())
+// }
 
 fn handle_check_dir(dirname: &Path, store_map: &StoreMap) -> Result<String, Box<dyn Error>> {
     let files = std::fs::read_dir(dirname)?;
@@ -279,9 +278,15 @@ fn handle_add_file(filename: &Path, store_map: &mut StoreMap) -> Result<String, 
     let values = store_map.entry(hash).or_default();
     if !values.contains(&pack_name.to_string()) {
         values.push(pack_name.to_string());
-        Ok(format!("SIGame pack {} was added to the store\n", pack_name))
+        Ok(format!(
+            "SIGame pack {} was added to the store\n",
+            pack_name
+        ))
     } else {
-        Ok(format!("SIGame pack {} is already present in the store\n", pack_name))
+        Ok(format!(
+            "SIGame pack {} is already present in the store\n",
+            pack_name
+        ))
     }
 }
 fn handle_remove_dir(dirname: &Path, store_map: &mut StoreMap) -> Result<String, Box<dyn Error>> {
@@ -307,9 +312,15 @@ fn handle_remove_file(filename: &Path, store_map: &mut StoreMap) -> Result<Strin
         .ok_or("Invalid file name")?;
     if store_map.contains_key(&hash) {
         store_map.remove(&hash);
-        Ok(format!("SIGame pack {} was removed from the store\n", pack_name))
+        Ok(format!(
+            "SIGame pack {} was removed from the store\n",
+            pack_name
+        ))
     } else {
-        Ok(format!("SIGame pack {} not found in the store\n", pack_name))
+        Ok(format!(
+            "SIGame pack {} not found in the store\n",
+            pack_name
+        ))
     }
 }
 
@@ -317,15 +328,21 @@ fn remove_by_index(index: &str, store_map: &mut StoreMap) -> Result<String, Box<
     let index = index.trim();
     let index = index.parse::<usize>()?;
     let map_copy = store_map.clone();
+    let mut hash_to_remove = None;
     for (i, (hash, _)) in map_copy.iter().enumerate() {
         if i == index {
-            store_map.remove(hash);
-            return Ok(format!("Pack {} removed\n", index));
+            hash_to_remove = Some(hash);
         }
     }
-    Ok(format!("Pack {} not found\n", index))
+    if let Some(hash_to_remove) = hash_to_remove {
+        store_map.remove(hash_to_remove);
+        Ok(format!("Pack {} removed\n", index))
+    } else {
+        Ok(format!("Pack {} not found\n", index))
+    }
 }
-fn is_siq_file(filename: &PathBuf) -> bool {
+
+fn is_siq_file(filename: &Path) -> bool {
     let extension = filename.extension().unwrap_or(OsStr::new(""));
     extension == FILE_EXTENSION
 }
@@ -341,7 +358,6 @@ where
     let hash = sha256::digest(buf.as_slice());
     Ok(hash)
 }
-
 
 fn main() -> Result<(), Box<dyn Error>> {
     let options = eframe::NativeOptions {
