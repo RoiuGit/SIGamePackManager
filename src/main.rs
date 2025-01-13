@@ -1,34 +1,197 @@
-use clap::{Parser, ValueEnum};
+use eframe::Storage;
+use native_dialog::FileDialog;
 use std::collections::HashMap;
 use std::error::Error;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
-use std::process::exit;
-
-static STORE: &str = "pack_store.pkgst";
 
 static FILE_EXTENSION: &str = "siq";
 
 type StoreMap = HashMap<String, Vec<String>>;
 
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-struct Args {
-    #[arg(short, long)]
-    file: Option<PathBuf>,
-    #[arg(short, long)]
-    dir: Option<PathBuf>,
-    #[arg(value_enum, required = true)]
-    action: Option<Action>,
+#[derive(Default)]
+struct AppState {
+    store_map: StoreMap,
+    selected_action: Action,
+    selected_type: SelectionType,
+    selected_path: Option<PathBuf>,
+    selected_index: String,
+    output: String,
 }
 
-#[derive(Debug, ValueEnum, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 enum Action {
     Add,
+    #[default]
     Check,
     Remove,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+enum SelectionType {
+    #[default]
+    File,
+    Directory,
+}
+
+impl eframe::App for AppState {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("SIGame Pack Manager");
+
+            // Type selector
+            ui.horizontal(|ui| {
+                ui.label("Type:");
+                ui.selectable_value(&mut self.selected_type, SelectionType::File, "File");
+                ui.selectable_value(&mut self.selected_type, SelectionType::Directory, "Directory");
+            });
+
+            // Action selector
+            ui.horizontal(|ui| {
+                ui.label("Action:");
+                ui.selectable_value(&mut self.selected_action, Action::Add, "Add");
+                ui.selectable_value(&mut self.selected_action, Action::Check, "Check");
+                ui.selectable_value(&mut self.selected_action, Action::Remove, "Remove");
+                ui.text_edit_singleline(&mut self.selected_index);
+            });
+
+            ui.horizontal(|ui| {
+
+                // File browser button
+                if ui.button("Browse").clicked() {
+                    let path = if self.selected_type == SelectionType::File {
+                        FileDialog::new()
+                            .add_filter("SIGame files", &[FILE_EXTENSION])
+                            .show_open_single_file()
+                    } else {
+                        FileDialog::new()
+                            .show_open_single_dir()
+                    };
+
+                    match path {
+                        Ok(Some(path)) => {
+                            self.selected_path = Some(path);
+                        }
+                        Ok(None) => self.output = "No file or directory selected".to_string(),
+                        Err(e) => self.output = format!("Error: {}", e),
+                    }
+                }
+
+                // Execute button
+                if ui.button("Execute").clicked() {
+                    if let Some(path) = &self.selected_path.clone() {
+                        match self.execute_action(path) {
+                            Ok(msg) => self.output = msg,
+                            Err(e) => self.output = format!("Error: {}", e),
+                        }
+                    } else {
+                        if !self.selected_index.is_empty() {
+                            self.output = remove_by_index(&self.selected_index, &mut self.store_map).unwrap_or_else(|e| {
+                                format!("Error: {}", e)
+                            });
+                        }
+                        else {
+                            self.output = "Please select a file or directory first.".to_string();
+                        }
+                    }
+                }
+
+                // See store button
+                if ui.button("See store").clicked() {
+                    self.see_store_action();
+                }
+            });
+
+            //Selected
+            ui.separator();
+            ui.label(&format!("Selected: {}", self.selected_path.as_ref()
+                .unwrap_or(&PathBuf::new())
+                .to_str().unwrap_or("")));
+
+            // Output window
+            ui.separator();
+            egui::ScrollArea::vertical()
+                .auto_shrink([false; 2]) // ensure it doesn't shrink vertically
+                .show(ui, |ui| {
+                    ui.label(&self.output);
+                });
+            //ui.text_edit_multiline(&mut self.output);
+        });
+    }
+
+    fn save(&mut self, storage: &mut dyn Storage) {
+        if let Ok(serialized) = serde_json::to_string(&self.store_map) {
+            storage.set_string("store_map", serialized);
+        }
+    }
+
+}
+
+impl AppState {
+
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let mut store_map = HashMap::new();
+        if let Some(storage) = cc.storage {
+            if let Some(serialized) = storage.get_string("store_map") {
+                if let Ok(map) = serde_json::from_str(&serialized) {
+                    store_map = map;
+                }
+            }
+        }
+
+        AppState {
+            store_map,
+            selected_action: Action::default(),
+            selected_type: SelectionType::default(),
+            selected_path: None,
+            selected_index: "".to_string(),
+            output: "Welcome to SIGame Pack Manager!".to_string(),
+        }
+    }
+
+    fn see_store_action(&mut self) {
+        let mut store = String::new();
+        for (i, (_hash, values)) in self.store_map.iter().enumerate() {
+            store.push_str(&format!("Pack {}:\n", i));
+            for value in values {
+                store.push_str(&format!("  {}\n", value));
+            }
+        }
+        self.output = store;
+    }
+
+    fn execute_action(&mut self, path: &Path) -> Result<String, Box<dyn Error>> {
+        // Dummy implementation for now
+        let output: String = match self.selected_action {
+            Action::Add => {
+                match self.selected_type {
+                    SelectionType::File => handle_add_file(path, &mut self.store_map)?,
+                    SelectionType::Directory => handle_add_dir(path, &mut self.store_map)?,
+                }
+            },
+            Action::Check => {
+                match self.selected_type {
+                    SelectionType::File => handle_check_file(path, &self.store_map)?,
+                    SelectionType::Directory => handle_check_dir(path, &self.store_map)?,
+                }
+                },
+            Action::Remove => {
+                let mut index = self.selected_index.clone();
+                if index.is_empty() {
+                    match self.selected_type {
+                        SelectionType::File => handle_remove_file(path, &mut self.store_map)?,
+                        SelectionType::Directory => handle_remove_dir(path, &mut self.store_map)?,
+                    }
+                } else {
+                    remove_by_index(&index, &mut self.store_map)?
+                }
+            },
+        };
+
+        Ok(output)
+    }
 }
 
 fn file_to_map(file: &str) -> Result<StoreMap, Box<dyn Error>> {
@@ -64,31 +227,20 @@ fn map_to_file(map: &StoreMap, file: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn handle_check_dir(dirname: &Path, store_map: &StoreMap) -> Result<(), Box<dyn Error>> {
+fn handle_check_dir(dirname: &Path, store_map: &StoreMap) -> Result<String, Box<dyn Error>> {
     let files = std::fs::read_dir(dirname)?;
+    let mut output = String::new();
     for file in files {
         let file = file?;
         let filename = file.path();
-        if !is_siq_file(&filename) {
-            handle_check_file(&filename, store_map)?;
+        if is_siq_file(&filename) {
+            output.push_str(&handle_check_file(&filename, store_map)?);
         }
     }
-    Ok(())
+    Ok(output)
 }
 
-fn handle_add_dir(dirname: &Path, store_map: &mut StoreMap) -> Result<(), Box<dyn Error>> {
-    let files = std::fs::read_dir(dirname)?;
-    for file in files {
-        let file = file?;
-        let filename = file.path();
-        if !is_siq_file(&filename) {
-            handle_add_file(&filename, store_map)?;
-        }
-    }
-    Ok(())
-}
-
-fn handle_check_file(filename: &Path, store_map: &StoreMap) -> Result<(), Box<dyn Error>> {
+fn handle_check_file(filename: &Path, store_map: &StoreMap) -> Result<String, Box<dyn Error>> {
     let file = File::open(filename)?;
     let pack_name = filename
         .file_name()
@@ -97,14 +249,26 @@ fn handle_check_file(filename: &Path, store_map: &StoreMap) -> Result<(), Box<dy
         .ok_or("Invalid file name")?;
     let hash = hash_entry(&file)?;
     if store_map.contains_key(&hash) {
-        println!("SIGame pack {} was played before", pack_name);
+        Ok(format!("SIGame pack {} was played before\n", pack_name))
     } else {
-        println!("SIGame pack {} wasn't played before", pack_name);
+        Ok(format!("SIGame pack {} wasn't played before\n", pack_name))
     }
-    Ok(())
 }
 
-fn handle_add_file(filename: &Path, store_map: &mut StoreMap) -> Result<(), Box<dyn Error>> {
+fn handle_add_dir(dirname: &Path, store_map: &mut StoreMap) -> Result<String, Box<dyn Error>> {
+    let files = std::fs::read_dir(dirname)?;
+    let mut output = String::new();
+    for file in files {
+        let file = file?;
+        let filename = file.path();
+        if is_siq_file(&filename) {
+            output.push_str(&handle_add_file(&filename, store_map)?);
+        }
+    }
+    Ok(output)
+}
+
+fn handle_add_file(filename: &Path, store_map: &mut StoreMap) -> Result<String, Box<dyn Error>> {
     let file = File::open(filename)?;
     let pack_name = filename
         .file_name()
@@ -115,13 +279,25 @@ fn handle_add_file(filename: &Path, store_map: &mut StoreMap) -> Result<(), Box<
     let values = store_map.entry(hash).or_default();
     if !values.contains(&pack_name.to_string()) {
         values.push(pack_name.to_string());
-        println!("SIGame pack {} was added to the store", pack_name);
+        Ok(format!("SIGame pack {} was added to the store\n", pack_name))
     } else {
-        println!("SIGame pack {} is present in the store", pack_name);
+        Ok(format!("SIGame pack {} is already present in the store\n", pack_name))
     }
-    Ok(())
 }
-fn handle_remove_file(filename: &Path, store_map: &mut StoreMap) -> Result<(), Box<dyn Error>> {
+fn handle_remove_dir(dirname: &Path, store_map: &mut StoreMap) -> Result<String, Box<dyn Error>> {
+    let files = std::fs::read_dir(dirname)?;
+    let mut output = String::new();
+    for file in files {
+        let file = file?;
+        let filename = file.path();
+        if is_siq_file(&filename) {
+            output.push_str(&handle_remove_file(&filename, store_map)?);
+        }
+    }
+    Ok(output)
+}
+
+fn handle_remove_file(filename: &Path, store_map: &mut StoreMap) -> Result<String, Box<dyn Error>> {
     let file = File::open(filename)?;
     let hash = hash_entry(&file)?;
     let pack_name = filename
@@ -131,27 +307,27 @@ fn handle_remove_file(filename: &Path, store_map: &mut StoreMap) -> Result<(), B
         .ok_or("Invalid file name")?;
     if store_map.contains_key(&hash) {
         store_map.remove(&hash);
-        println!("SIGame pack {} was removed from the store", pack_name);
+        Ok(format!("SIGame pack {} was removed from the store\n", pack_name))
     } else {
-        println!("SIGame pack {} not found in the store", pack_name);
+        Ok(format!("SIGame pack {} not found in the store\n", pack_name))
     }
-    Ok(())
 }
 
-fn handle_remove_dir(dirname: &Path, store_map: &mut StoreMap) -> Result<(), Box<dyn Error>> {
-    let files = std::fs::read_dir(dirname)?;
-    for file in files {
-        let file = file?;
-        let filename = file.path();
-        if is_siq_file(&filename) {
-            handle_remove_file(&filename, store_map)?;
+fn remove_by_index(index: &str, store_map: &mut StoreMap) -> Result<String, Box<dyn Error>> {
+    let index = index.trim();
+    let index = index.parse::<usize>()?;
+    let map_copy = store_map.clone();
+    for (i, (hash, _)) in map_copy.iter().enumerate() {
+        if i == index {
+            store_map.remove(hash);
+            return Ok(format!("Pack {} removed\n", index));
         }
     }
-    Ok(())
+    Ok(format!("Pack {} not found\n", index))
 }
-
 fn is_siq_file(filename: &PathBuf) -> bool {
-    filename.extension().unwrap_or(OsStr::new("")) == FILE_EXTENSION
+    let extension = filename.extension().unwrap_or(OsStr::new(""));
+    extension == FILE_EXTENSION
 }
 
 fn hash_entry<R>(mut file: R) -> Result<String, Box<dyn Error>>
@@ -166,67 +342,17 @@ where
     Ok(hash)
 }
 
-fn main() {
-    let args = Args::parse();
 
-    if args.dir.is_some() && args.file.is_some() {
-        eprintln!("Cannot specify both a file and a directory");
-        exit(1);
-    }
-
-    let action = args.action.unwrap_or_else(|| {
-        eprintln!("No action specified");
-        exit(1);
-    });
-
-    let mut store_map = file_to_map(STORE).unwrap_or_default();
-
-    if args.file.is_some() {
-        let file = args.file.unwrap_or_else(|| {
-            eprintln!("No file or directory specified");
-            exit(1);
-        });
-        if !is_siq_file(&file) {
-            eprintln!("File must be a .siq file");
-            exit(1);
-        }
-        match action {
-            Action::Add => handle_add_file(&file, &mut store_map).unwrap_or_else(|e| {
-                eprintln!("Error: {}", e);
-                exit(1);
-            }),
-            Action::Check => handle_check_file(&file, &store_map).unwrap_or_else(|e| {
-                eprintln!("Error: {}", e);
-                exit(1);
-            }),
-            Action::Remove => handle_remove_file(&file, &mut store_map).unwrap_or_else(|e| {
-                eprintln!("Error: {}", e);
-                exit(1);
-            }),
-        }
-    } else if args.dir.is_some() {
-        let dir = args.dir.unwrap_or_else(|| {
-            eprintln!("No file or directory specified");
-            exit(1);
-        });
-        match action {
-            Action::Add => handle_add_dir(&dir, &mut store_map).unwrap_or_else(|e| {
-                eprintln!("Error: {}", e);
-                exit(1);
-            }),
-            Action::Check => handle_check_dir(&dir, &store_map).unwrap_or_else(|e| {
-                eprintln!("Error: {}", e);
-                exit(1);
-            }),
-            Action::Remove => handle_remove_dir(&dir, &mut store_map).unwrap_or_else(|e| {
-                eprintln!("Error: {}", e);
-                exit(1);
-            }),
-        }
-    }
-
-    map_to_file(&store_map, STORE).unwrap_or_else(|e| {
-        eprintln!("Error: {}", e);
-        exit(1);
-    });
+fn main() -> Result<(), Box<dyn Error>> {
+    let options = eframe::NativeOptions {
+        ..Default::default()
+    };
+    println!("Starting SIGame Pack Manager");
+    eframe::run_native(
+        "SIGame Pack Manager",
+        options,
+        Box::new(|cc| Ok(Box::new(AppState::new(cc)))),
+    )?;
+    println!("Exiting SIGame Pack Manager");
+    Ok(())
 }
