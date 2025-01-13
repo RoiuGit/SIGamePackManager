@@ -327,16 +327,15 @@ fn handle_remove_file(filename: &Path, store_map: &mut StoreMap) -> Result<Strin
 fn remove_by_index(index: &str, store_map: &mut StoreMap) -> Result<String, Box<dyn Error>> {
     let index = index.trim();
     let index = index.parse::<usize>()?;
-    let map_copy = store_map.clone();
     let mut hash_to_remove = None;
-    for (i, (hash, _)) in map_copy.iter().enumerate() {
+    for (i, hash) in store_map.keys().enumerate() {
         if i == index {
-            hash_to_remove = Some(hash);
+            hash_to_remove = Some(hash.clone());
             break
         }
     }
     if let Some(hash_to_remove) = hash_to_remove {
-        store_map.remove(hash_to_remove);
+        store_map.remove(&hash_to_remove);
         Ok(format!("Pack {} removed\n", index))
     } else {
         Ok(format!("Pack {} not found\n", index))
